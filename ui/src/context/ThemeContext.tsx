@@ -9,21 +9,42 @@ import {
 } from "react";
 
 type Theme = "light" | "dark";
+type ThemePreference = "light" | "dark" | "system";
 
 interface ThemeContextValue {
+  /** The resolved theme currently applied ("light" or "dark"). */
   theme: Theme;
-  setTheme: (theme: Theme) => void;
+  /** The user's preference ("light", "dark", or "system"). */
+  preference: ThemePreference;
+  setPreference: (preference: ThemePreference) => void;
+  /** Cycles through dark → system → light → dark. */
   toggleTheme: () => void;
 }
 
 const THEME_STORAGE_KEY = "paperclip.theme";
 const DARK_THEME_COLOR = "#18181b";
 const LIGHT_THEME_COLOR = "#ffffff";
+const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
-function resolveThemeFromDocument(): Theme {
-  if (typeof document === "undefined") return "dark";
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+function getSystemTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  return window.matchMedia(MEDIA_QUERY).matches ? "dark" : "light";
+}
+
+function resolveTheme(preference: ThemePreference): Theme {
+  return preference === "system" ? getSystemTheme() : preference;
+}
+
+function readStoredPreference(): ThemePreference {
+  if (typeof window === "undefined") return "dark";
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "light" || stored === "dark" || stored === "system") return stored;
+  } catch {
+    // Ignore storage read failures.
+  }
+  return "dark";
 }
 
 function applyTheme(theme: Theme) {
@@ -38,33 +59,55 @@ function applyTheme(theme: Theme) {
   }
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => resolveThemeFromDocument());
+const CYCLE_ORDER: ThemePreference[] = ["dark", "system", "light"];
 
-  const setTheme = useCallback((nextTheme: Theme) => {
-    setThemeState(nextTheme);
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [preference, setPreferenceState] = useState<ThemePreference>(() => readStoredPreference());
+  const [resolvedTheme, setResolvedTheme] = useState<Theme>(() => resolveTheme(preference));
+
+  const setPreference = useCallback((next: ThemePreference) => {
+    setPreferenceState(next);
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setThemeState((current) => (current === "dark" ? "light" : "dark"));
+    setPreferenceState((current) => {
+      const idx = CYCLE_ORDER.indexOf(current);
+      return CYCLE_ORDER[(idx + 1) % CYCLE_ORDER.length]!;
+    });
   }, []);
 
+  // Resolve theme whenever preference changes or system preference changes.
   useEffect(() => {
-    applyTheme(theme);
+    const resolved = resolveTheme(preference);
+    setResolvedTheme(resolved);
+    applyTheme(resolved);
+
     try {
-      localStorage.setItem(THEME_STORAGE_KEY, theme);
+      localStorage.setItem(THEME_STORAGE_KEY, preference);
     } catch {
       // Ignore local storage write failures in restricted environments.
     }
-  }, [theme]);
+
+    if (preference !== "system") return;
+
+    const mql = window.matchMedia(MEDIA_QUERY);
+    const handler = (e: MediaQueryListEvent) => {
+      const next = e.matches ? "dark" : "light";
+      setResolvedTheme(next);
+      applyTheme(next);
+    };
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, [preference]);
 
   const value = useMemo(
     () => ({
-      theme,
-      setTheme,
+      theme: resolvedTheme,
+      preference,
+      setPreference,
       toggleTheme,
     }),
-    [theme, setTheme, toggleTheme],
+    [resolvedTheme, preference, setPreference, toggleTheme],
   );
 
   return (
