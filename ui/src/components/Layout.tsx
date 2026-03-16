@@ -81,7 +81,6 @@ export function Layout() {
   const lastMainScrollTop = useRef(0);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
   const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
-  const themeLabel = preference === "dark" ? "dark" : preference === "system" ? "system" : "light";
   const ThemeIcon = preference === "dark" ? Moon : preference === "system" ? Monitor : Sun;
   const matchedCompany = useMemo(() => {
     if (!companyPrefix) return null;
@@ -332,8 +331,8 @@ export function Layout() {
                   size="icon-sm"
                   className="text-muted-foreground shrink-0"
                   onClick={toggleTheme}
-                  aria-label={`Theme: ${themeLabel}`}
-                  title={`Theme: ${themeLabel}`}
+                  aria-label={`Theme: ${preference}`}
+                  title={`Theme: ${preference}`}
                 >
                   <ThemeIcon className="h-4 w-4" />
                 </Button>
@@ -382,8 +381,8 @@ export function Layout() {
                   size="icon-sm"
                   className="text-muted-foreground shrink-0"
                   onClick={toggleTheme}
-                  aria-label={`Theme: ${themeLabel}`}
-                  title={`Theme: ${themeLabel}`}
+                  aria-label={`Theme: ${preference}`}
+                  title={`Theme: ${preference}`}
                 >
                   <ThemeIcon className="h-4 w-4" />
                 </Button>
