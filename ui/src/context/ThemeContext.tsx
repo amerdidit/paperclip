@@ -8,8 +8,8 @@ import {
   type ReactNode,
 } from "react";
 
-type Theme = "light" | "dark";
-type ThemePreference = "light" | "dark" | "system";
+export type Theme = "light" | "dark";
+export type ThemePreference = "light" | "dark" | "system";
 
 interface ThemeContextValue {
   /** The resolved theme currently applied ("light" or "dark"). */
@@ -27,16 +27,16 @@ const LIGHT_THEME_COLOR = "#ffffff";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
-function getSystemTheme(): Theme {
+export function getSystemTheme(): Theme {
   if (typeof window === "undefined") return "dark";
   return window.matchMedia(MEDIA_QUERY).matches ? "dark" : "light";
 }
 
-function resolveTheme(preference: ThemePreference): Theme {
+export function resolveTheme(preference: ThemePreference): Theme {
   return preference === "system" ? getSystemTheme() : preference;
 }
 
-function readStoredPreference(): ThemePreference {
+export function readStoredPreference(): ThemePreference {
   if (typeof window === "undefined") return "dark";
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -59,7 +59,7 @@ function applyTheme(theme: Theme) {
   }
 }
 
-const CYCLE_ORDER: ThemePreference[] = ["dark", "system", "light"];
+export const CYCLE_ORDER: ThemePreference[] = ["dark", "system", "light"];
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [preference, setPreferenceState] = useState<ThemePreference>(() => readStoredPreference());
