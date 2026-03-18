@@ -9,6 +9,7 @@
   "orientation": "any",
   "theme_color": "#18181b",
   "background_color": "#18181b",
+  "categories": ["productivity", "business"],
   "icons": [
     {
       "src": "/android-chrome-192x192.png",
@@ -26,5 +27,22 @@
       "type": "image/png",
       "purpose": "maskable"
     }
-  ]
+  ],
+  "shortcuts": [
+    {
+      "name": "Inbox",
+      "short_name": "Inbox",
+      "url": "/inbox",
+      "icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Issues",
+      "short_name": "Issues",
+      "url": "/issues",
+      "icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192" }]
+    }
+  ],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  }
 }

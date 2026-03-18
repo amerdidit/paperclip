@@ -1,16 +1,34 @@
-const CACHE_NAME = "paperclip-v2";
+const CACHE_NAME = "paperclip-v3";
 
-self.addEventListener("install", () => {
+const APP_SHELL = [
+  "/",
+  "/offline.html",
+];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+  );
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.map((key) => caches.delete(key)))
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      )
     )
   );
   self.clients.claim();
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener("fetch", (event) => {
@@ -33,10 +51,14 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => {
-        if (request.mode === "navigate") {
-          return caches.match("/") || new Response("Offline", { status: 503 });
-        }
-        return caches.match(request);
+        return caches.match(request).then((cached) => {
+          if (cached) return cached;
+          // For navigation requests, serve the offline page
+          if (request.mode === "navigate") {
+            return caches.match("/offline.html");
+          }
+          return new Response("Offline", { status: 503 });
+        });
       })
   );
 });

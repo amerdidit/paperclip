@@ -23,7 +23,10 @@ initPluginBridge(React, ReactDOM);
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js");
+    navigator.serviceWorker.register("/sw.js").then((registration) => {
+      // Check for updates every 60 seconds
+      setInterval(() => registration.update(), 60_000);
+    });
   });
 }
 

@@ -38,6 +38,7 @@ import { queryKeys } from "./lib/queryKeys";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
+import { PWAPrompts } from "./components/PWAPrompts";
 
 function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: boolean }) {
   return (
@@ -331,6 +332,7 @@ export function App() {
         </Route>
       </Routes>
       <OnboardingWizard />
+      <PWAPrompts />
     </>
   );
 }
