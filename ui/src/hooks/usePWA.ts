@@ -48,9 +48,11 @@ export function usePWA(): PWAState {
   const deferredPromptRef = useRef<BeforeInstallPromptEvent | null>(null);
   const waitingWorkerRef = useRef<ServiceWorker | null>(null);
 
-  const isInstalled =
-    window.matchMedia("(display-mode: standalone)").matches ||
-    (navigator as unknown as { standalone?: boolean }).standalone === true;
+  const [isInstalled] = useState(
+    () =>
+      window.matchMedia("(display-mode: standalone)").matches ||
+      (navigator as unknown as { standalone?: boolean }).standalone === true,
+  );
 
   // Capture the beforeinstallprompt event
   useEffect(() => {
@@ -73,12 +75,33 @@ export function usePWA(): PWAState {
     };
   }, []);
 
-  // Listen for service worker updates
+  // Listen for service worker updates and poll for new versions
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+
     const handleControllerChange = () => {
       window.location.reload();
+    };
+
+    const handleUpdateFound = () => {
+      const newWorker = registrationRef.current?.installing;
+      if (!newWorker) return;
+
+      newWorker.addEventListener("statechange", () => {
+        if (
+          newWorker.state === "installed" &&
+          navigator.serviceWorker.controller
+        ) {
+          waitingWorkerRef.current = newWorker;
+          setUpdateAvailable(true);
+        }
+      });
+    };
+
+    const registrationRef: { current: ServiceWorkerRegistration | null } = {
+      current: null,
     };
 
     navigator.serviceWorker.addEventListener(
@@ -87,26 +110,17 @@ export function usePWA(): PWAState {
     );
 
     navigator.serviceWorker.ready.then((registration) => {
-      // Check if there's already a waiting worker
+      registrationRef.current = registration;
+
       if (registration.waiting) {
         waitingWorkerRef.current = registration.waiting;
         setUpdateAvailable(true);
       }
 
-      registration.addEventListener("updatefound", () => {
-        const newWorker = registration.installing;
-        if (!newWorker) return;
+      registration.addEventListener("updatefound", handleUpdateFound);
 
-        newWorker.addEventListener("statechange", () => {
-          if (
-            newWorker.state === "installed" &&
-            navigator.serviceWorker.controller
-          ) {
-            waitingWorkerRef.current = newWorker;
-            setUpdateAvailable(true);
-          }
-        });
-      });
+      // Poll for updates every 60 seconds
+      pollTimer = setInterval(() => registration.update(), 60_000);
     });
 
     return () => {
@@ -114,6 +128,11 @@ export function usePWA(): PWAState {
         "controllerchange",
         handleControllerChange,
       );
+      registrationRef.current?.removeEventListener(
+        "updatefound",
+        handleUpdateFound,
+      );
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, []);
 
