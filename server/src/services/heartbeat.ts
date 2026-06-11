@@ -6692,6 +6692,34 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     if (issueId) {
+      const issueRow = await db
+        .select({ id: issues.id, status: issues.status })
+        .from(issues)
+        .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
+        .then((rows) => rows[0] ?? null);
+      const wakeCommentId = deriveCommentId(enrichedContextSnapshot, payload);
+      const resumeIntent =
+        enrichedContextSnapshot.resumeIntent === true ||
+        enrichedContextSnapshot.followUpRequested === true;
+      if (!issueRow) {
+        await writeSkippedRequest("issue_not_found");
+        return null;
+      }
+      if (
+        (issueRow.status === "done" || issueRow.status === "cancelled") &&
+        !resumeIntent &&
+        !wakeCommentId
+      ) {
+        await writeSkippedRequest("issue_terminal_status");
+        logger.info(
+          { agentId, issueId, issueStatus: issueRow.status },
+          "enqueueWakeup: skipped wakeup for terminal issue",
+        );
+        return null;
+      }
+    }
+
+    if (issueId) {
       const activePauseHold = await treeControlSvc.getActivePauseHoldGate(agent.companyId, issueId);
       if (activePauseHold) {
         const treeHoldInteractionWake = await isVerifiedIssueTreeControlInteractionWake(db, {

@@ -542,4 +542,66 @@ describeEmbeddedPostgres("heartbeat stale queued-run invalidation", () => {
     expect(run?.errorCode).toBeNull();
     expect(mockAdapterExecute).toHaveBeenCalledTimes(1);
   });
+
+  it("skips wakeups for issues already in terminal status at enqueue time", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Already cancelled issue",
+      status: "cancelled",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    const run = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "test_terminal_enqueue",
+      payload: { issueId },
+      contextSnapshot: { issueId },
+    });
+
+    expect(run).toBeNull();
+
+    const requests = await db
+      .select()
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.agentId, agentId));
+    expect(requests).toHaveLength(1);
+    expect(requests[0].status).toBe("skipped");
+    expect(requests[0].reason).toBe("issue_terminal_status");
+
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(0);
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+  });
+
+  it("still enqueues comment-driven wakes on terminal issues", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+    const commentId = randomUUID();
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Cancelled but commented",
+      status: "cancelled",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    const run = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_comment",
+      payload: { issueId, commentId },
+      contextSnapshot: { issueId, commentId, wakeReason: "issue_comment" },
+    });
+
+    expect(run).not.toBeNull();
+  });
 });
