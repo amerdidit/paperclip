@@ -3547,7 +3547,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           agentId: run.agentId,
           invocationSource: "automation",
           triggerDetail: "system",
-          status: "queued",
+          // scheduled_retry with jitter instead of immediate queue: a mass
+          // process death (OOM kill, operator SIGTERM sweep) would otherwise
+          // respawn the whole fleet at once and repeat the overload.
+          status: "scheduled_retry",
+          scheduledRetryAt: new Date(
+            now.getTime() + 60_000 + Math.floor(Math.random() * 120_000),
+          ),
+          scheduledRetryReason: "process_lost",
           wakeupRequestId: wakeupRequest.id,
           contextSnapshot: retryContextSnapshot,
           sessionIdBefore: sessionBefore,
