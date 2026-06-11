@@ -629,6 +629,35 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return row ?? null;
   }
 
+  // Caps evaluation issues at one open per subject agent: a mass-stuck event
+  // (e.g. host overload) would otherwise file one meta-issue per stuck run
+  // (observed 75 for a single agent on 2026-06-11).
+  async function findOpenStaleRunEvaluationForAgent(companyId: string, agentId: string) {
+    const [row] = await db
+      .select({
+        id: issues.id,
+        identifier: issues.identifier,
+        status: issues.status,
+        priority: issues.priority,
+        assigneeAgentId: issues.assigneeAgentId,
+        updatedAt: issues.updatedAt,
+      })
+      .from(issues)
+      .innerJoin(heartbeatRuns, sql`${issues.originId} = ${heartbeatRuns.id}::text`)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          eq(issues.originKind, STALE_ACTIVE_RUN_EVALUATION_ORIGIN_KIND),
+          eq(heartbeatRuns.agentId, agentId),
+          isNull(issues.hiddenAt),
+          notInArray(issues.status, ["done", "cancelled"]),
+        ),
+      )
+      .orderBy(desc(issues.updatedAt))
+      .limit(1);
+    return row ?? null;
+  }
+
   // Returns the most recently closed (done/cancelled) evaluation for a run, or null if none exists.
   // Used to apply an implicit re-arm window after a reviewer closes an evaluation without recording
   // an explicit watchdog decision — preventing a new evaluation from firing immediately.
@@ -1008,6 +1037,21 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       if (closedAgeMs < ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS) {
         return { kind: "suppressed" as const };
       }
+    }
+
+    const agentScoped = await findOpenStaleRunEvaluationForAgent(
+      input.run.companyId,
+      input.run.agentId,
+    );
+    if (agentScoped) {
+      await issuesSvc.addComment(agentScoped.id, [
+        `Additional silent run detected for ${runningAgent.name}.`,
+        "",
+        `- Run: \`${input.run.id}\``,
+        `- Silent for: ${formatDuration(evidence.silenceAgeMs)}`,
+        `- Last output at: ${input.run.lastOutputAt?.toISOString() ?? "none recorded"}`,
+      ].join("\n"), { runId: input.run.id });
+      return { kind: "existing" as const, evaluationIssueId: agentScoped.id };
     }
 
     const ownerAgentId = await resolveStaleRunOwnerAgentId({ run: input.run, runningAgent, sourceIssue });

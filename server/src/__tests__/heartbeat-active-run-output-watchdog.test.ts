@@ -7,6 +7,7 @@ import {
   createDb,
   heartbeatRunWatchdogDecisions,
   heartbeatRuns,
+  issueComments,
   issueRelations,
   issues,
 } from "@paperclipai/db";
@@ -213,6 +214,60 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     });
     expect(evaluations[0]?.description).toContain("Decision Checklist");
     expect(evaluations[0]?.description).not.toContain("sk-test-secret-value");
+  });
+
+  it("caps open evaluation issues at one per agent and folds extra silent runs into comments", async () => {
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, coderId } = await seedRunningRun({
+      now,
+      ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
+    });
+
+    // second silent running run for the SAME agent
+    const secondIssueId = randomUUID();
+    const secondRunId = randomUUID();
+    const startedAt = new Date(now.getTime() - ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS - 120_000);
+    await db.insert(issues).values({
+      id: secondIssueId,
+      companyId,
+      title: "Second long running implementation",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: coderId,
+      issueNumber: 2,
+      updatedAt: startedAt,
+      createdAt: startedAt,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: secondRunId,
+      companyId,
+      agentId: coderId,
+      status: "running",
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      startedAt,
+      processStartedAt: startedAt,
+      lastOutputAt: null,
+      lastOutputSeq: 0,
+      contextSnapshot: { issueId: secondIssueId },
+      logBytes: 0,
+    });
+    await db.update(issues).set({ executionRunId: secondRunId }).where(eq(issues.id, secondIssueId));
+
+    const heartbeat = heartbeatService(db);
+    await heartbeat.scanSilentActiveRuns({ now, companyId });
+
+    const evaluations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_active_run_evaluation")));
+    expect(evaluations).toHaveLength(1);
+
+    const comments = await db
+      .select()
+      .from(issueComments)
+      .where(eq(issueComments.issueId, evaluations[0].id));
+    expect(comments.length).toBeGreaterThanOrEqual(1);
   });
 
   it("redacts sensitive values from actual run-log evidence", async () => {
