@@ -2147,9 +2147,17 @@ export type HeartbeatEnvironmentRuntime = ReturnType<typeof environmentRuntimeSe
 export interface HeartbeatServiceOptions {
   pluginWorkerManager?: PluginWorkerManager;
   environmentRuntime?: HeartbeatEnvironmentRuntime;
+  maxGlobalConcurrentRuns?: number;
 }
 
+const GLOBAL_MAX_CONCURRENT_RUNS_DEFAULT = (() => {
+  const parsed = Number.parseInt(process.env.PAPERCLIP_MAX_CONCURRENT_RUNS ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8;
+})();
+
 export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) {
+  const maxGlobalConcurrentRuns =
+    options.maxGlobalConcurrentRuns ?? GLOBAL_MAX_CONCURRENT_RUNS_DEFAULT;
   const instanceSettings = instanceSettingsService(db);
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
@@ -3964,6 +3972,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return Number(count ?? 0);
   }
 
+  async function countRunningRunsGlobal() {
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.status, "running"));
+    return Number(count ?? 0);
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
@@ -4823,8 +4839,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       const policy = parseHeartbeatPolicy(agent);
       const runningCount = await countRunningRunsForAgent(agentId);
-      const availableSlots = Math.max(0, policy.maxConcurrentRuns - runningCount);
-      if (availableSlots <= 0) return [];
+      const globalRunning = await countRunningRunsGlobal();
+      const globalSlots = Math.max(0, maxGlobalConcurrentRuns - globalRunning);
+      const availableSlots = Math.min(
+        Math.max(0, policy.maxConcurrentRuns - runningCount),
+        globalSlots,
+      );
+      if (availableSlots <= 0) {
+        if (globalSlots <= 0) {
+          logger.warn(
+            { agentId, globalRunning, maxGlobalConcurrentRuns },
+            "startNextQueuedRunForAgent: global concurrency cap reached, deferring",
+          );
+        }
+        return [];
+      }
 
       const queuedRuns = await db
         .select()
