@@ -4837,8 +4837,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
   }
 
+  // Single lock key for ALL agents: the count-then-claim section must be
+  // serialized process-wide or concurrent wakes for different agents each read
+  // the global running count before any claim commits, blowing through
+  // maxGlobalConcurrentRuns (post-mortem 2026-06-11, finding C1). executeRun is
+  // fired without await, so only the fast DB claim work is serialized.
+  const GLOBAL_RUN_START_LOCK_KEY = "__global_run_start__";
+
   async function startNextQueuedRunForAgent(agentId: string) {
-    return withAgentStartLock(agentId, async () => {
+    return withAgentStartLock(GLOBAL_RUN_START_LOCK_KEY, async () => {
       const agent = await getAgent(agentId);
       if (!agent) return [];
       if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {

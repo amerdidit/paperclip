@@ -241,4 +241,68 @@ describeEmbeddedPostgres("heartbeat global concurrency cap", () => {
 
     releaseRuns();
   });
+
+  it("holds the cap under CONCURRENT wakes for different agents (read-then-claim race)", async () => {
+    heartbeat = heartbeatService(db, { maxGlobalConcurrentRuns: 2 });
+
+    let releaseRuns!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseRuns = resolve;
+    });
+    mockAdapterExecute.mockImplementation(async () => {
+      await gate;
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        errorMessage: null,
+        summary: "done",
+        provider: "test",
+        model: "test-model",
+      };
+    });
+
+    const seeds = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        seedCompanyAndAgent({ agentName: `R${i}`, maxConcurrentRuns: 5 }),
+      ),
+    );
+    const issueIds: string[] = [];
+    for (const seed of seeds) {
+      const issueId = randomUUID();
+      issueIds.push(issueId);
+      await db.insert(issues).values({
+        id: issueId,
+        companyId: seed.companyId,
+        title: "concurrent work",
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: seed.agentId,
+      });
+    }
+
+    // Fire all wakes concurrently — each wake claims at the end of enqueueWakeup,
+    // so 5 claim sections race against the global count.
+    await Promise.all(
+      seeds.map((seed, i) =>
+        heartbeat.wakeup(seed.agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "race_test",
+          payload: { issueId: issueIds[i] },
+          contextSnapshot: { issueId: issueIds[i] },
+        }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const running = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.status, "running"));
+    expect(running.length).toBeLessThanOrEqual(2);
+    expect(running.length).toBeGreaterThan(0);
+
+    releaseRuns();
+  });
 });
