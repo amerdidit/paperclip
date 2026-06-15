@@ -28,12 +28,15 @@ const DEFAULT_SESSION_COMPACTION_POLICY: SessionCompactionPolicy = {
 };
 
 // Adapters with native context management still participate in session resume,
-// but Paperclip should not rotate them using threshold-based compaction.
+// so we defer run-count and raw-token rotation to their own compaction. But
+// native compaction does not stop cached-input tokens from compounding at the
+// API layer across long-lived heartbeat sessions (issue #4), so we still
+// enforce an absolute age ceiling: a session may not be resumed past 72h.
 const ADAPTER_MANAGED_SESSION_POLICY: SessionCompactionPolicy = {
   enabled: true,
   maxSessionRuns: 0,
   maxRawInputTokens: 0,
-  maxSessionAgeHours: 0,
+  maxSessionAgeHours: 72,
 };
 
 export const LEGACY_SESSIONED_ADAPTER_TYPES = new Set([
