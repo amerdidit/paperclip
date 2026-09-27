@@ -9177,6 +9177,8 @@ export interface HeartbeatServiceOptions {
   pluginWorkerManager?: PluginWorkerManager;
   environmentRuntime?: HeartbeatEnvironmentRuntime;
   runtimeEnv?: Record<string, string | undefined>;
+  /** Host-wide cap on running heartbeat runs; defaults to PAPERCLIP_MAX_CONCURRENT_RUNS or 8. */
+  maxGlobalConcurrentRuns?: number;
   /**
    * Provider-boundary seam for persisted native-run recovery tests. Keeping
    * the seam here exercises the production reaper, claim, execution, package
@@ -9315,6 +9317,8 @@ export function resolveHeartbeatSchedulingSuppression(
   return { suppressed: false, reason: null };
 }
 
+const GLOBAL_RUN_START_LOCK_KEY = "__global_run_start__";
+
 export function heartbeatService(
   db: Db,
   options: HeartbeatServiceOptions = {},
@@ -9325,6 +9329,14 @@ export function heartbeatService(
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
   });
   const runtimeEnv = options.runtimeEnv ?? process.env;
+  // Per-agent maxConcurrentRuns alone allows agents x 20 subprocesses; the
+  // 2026-06-11 OOM hit at ~80 concurrent Claude runs on one box.
+  const maxGlobalConcurrentRuns =
+    options.maxGlobalConcurrentRuns ??
+    (() => {
+      const parsed = Number.parseInt(runtimeEnv.PAPERCLIP_MAX_CONCURRENT_RUNS ?? "", 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 8;
+    })();
   const inWorktreeRuntime = isTruthyRuntimeEnvValue(
     runtimeEnv.PAPERCLIP_IN_WORKTREE,
   );
@@ -16793,6 +16805,14 @@ export function heartbeatService(
     return Number(count ?? 0);
   }
 
+  async function countRunningRunsGlobal() {
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.status, "running"));
+    return Number(count ?? 0);
+  }
+
   async function withChatControlRecoveryGate(
     run: typeof heartbeatRuns.$inferSelect,
     stage: "claim" | "dispatch",
@@ -19426,7 +19446,11 @@ export function heartbeatService(
     if ((await getSchedulingSuppression()).suppressed) return [];
     const cutoff = await getWorktreeExecutionCutoff();
 
-    return withAgentStartLock(agentId, async () => {
+    // Single lock key for ALL agents: the count-then-claim section must be
+    // serialized process-wide or concurrent wakes for different agents each
+    // read the global running count before any claim commits, blowing through
+    // maxGlobalConcurrentRuns (post-mortem 2026-06-11, finding C1).
+    return withAgentStartLock(GLOBAL_RUN_START_LOCK_KEY, async () => {
       const agent = await getAgent(agentId);
       if (!agent) return [];
       const invokability = await getAgentInvokability(agent);
@@ -19441,11 +19465,21 @@ export function heartbeatService(
       }
       const policy = parseHeartbeatPolicy(agent);
       const runningCount = await countRunningRunsForAgent(agentId);
-      const availableSlots = Math.max(
-        0,
-        policy.maxConcurrentRuns - runningCount,
+      const globalRunning = await countRunningRunsGlobal();
+      const globalSlots = Math.max(0, maxGlobalConcurrentRuns - globalRunning);
+      const availableSlots = Math.min(
+        Math.max(0, policy.maxConcurrentRuns - runningCount),
+        globalSlots,
       );
-      if (availableSlots <= 0) return [];
+      if (availableSlots <= 0) {
+        if (globalSlots <= 0) {
+          logger.warn(
+            { agentId, globalRunning, maxGlobalConcurrentRuns },
+            "startNextQueuedRunForAgent: global concurrency cap reached, deferring",
+          );
+        }
+        return [];
+      }
 
       const queuedRuns = await db
         .select()
