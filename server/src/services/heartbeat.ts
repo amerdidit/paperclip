@@ -26216,6 +26216,34 @@ export function heartbeatService(
       return null;
     }
 
+    // Skip wakeups for done/cancelled issues at enqueue time instead of queueing
+    // a run that claim-time staleness cancels minutes later (amplified the
+    // 2026-06-11 cancellation cascade). Comment, resume, durable-message and
+    // interaction wakes are exempt, mirroring the claim-time exemptions.
+    if (
+      issueId &&
+      !wakeCommentId &&
+      !durableRequest &&
+      enrichedContextSnapshot.resumeIntent !== true &&
+      enrichedContextSnapshot.followUpRequested !== true &&
+      !isInteractionResolutionWakePayload(payload ?? {}) &&
+      !hasInteractionContinuationWakeContext(enrichedContextSnapshot)
+    ) {
+      const issueRow = await db
+        .select({ status: issues.status })
+        .from(issues)
+        .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (issueRow && (issueRow.status === "done" || issueRow.status === "cancelled")) {
+        await writeSkippedRequest("issue_terminal_status");
+        logger.info(
+          { agentId, issueId, issueStatus: issueRow.status },
+          "enqueueWakeup: skipped wakeup for terminal issue",
+        );
+        return null;
+      }
+    }
+
     if (issueId) {
       const activePauseHold = await treeControlSvc.getActivePauseHoldGate(
         agent.companyId,
