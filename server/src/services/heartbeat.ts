@@ -14246,7 +14246,13 @@ export function heartbeatService(
     // transient retries; process loss must not open a second retry budget.
     if (run.runtimeMode === "native" || legacyExecutionNeedsReconciliation(run))
       return null;
-    const scheduled = await scheduleBoundedRetryForRun(run, agent, { now });
+    // Spread process-loss retries over 60-180s: after a mass kill (OOM,
+    // SIGTERM sweep) a fixed delay respawns the whole fleet at once
+    // (2026-06-11: 42 respawns in 3 minutes).
+    const scheduled = await scheduleBoundedRetryForRun(run, agent, {
+      now,
+      delayMs: 60_000 + Math.floor(Math.random() * 120_000),
+    });
     return scheduled.outcome === "scheduled" ? scheduled.run : null;
   }
 
